@@ -16,6 +16,8 @@ add_executable(csgfx_app
 	src/app.cpp
 	src/renderer.cpp
 	src/mesh.cpp
+	src/input.cpp
+	src/flying_camera_controller.cpp
 	src/logger.cpp)
 
 
