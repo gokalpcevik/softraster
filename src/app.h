@@ -2,6 +2,8 @@
 #include "SDL2/SDL.h"
 #include "logger.h"
 #include "renderer.h"
+#include "flying_camera_controller.h"
+#include "input.h"
 #include <cstdint>
 
 namespace gfx {
@@ -15,6 +17,8 @@ struct App {
         f64 frame_time_ms = 0.0;
     } timestep;
     u64 perf_counter = 0;
+		FlyingCameraController camera_controller;
+		bool trap_mouse = false;
 };
 
 static App* app;
