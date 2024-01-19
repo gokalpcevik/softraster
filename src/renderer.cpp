@@ -35,10 +35,9 @@ bool InitRenderer(SDL_Window* window, Renderer* renderer) {
         gfx_error(SDL_GetError());
         return false;
     }
-
     renderer->color_buffer_pitch = sizeof(u32) * w;
 
-    // Allocate color buffer (CpU)
+    // Allocate color buffer (CPU)
     renderer->color_buffer = new u32[w * h];
 
     renderer->w_buffer = new f32[w * h];
@@ -66,7 +65,7 @@ bool InitRenderer(SDL_Window* window, Renderer* renderer) {
     renderer->color_buffer_size_in_bytes = sizeof(u32) * (size_t)w * (size_t)h;
     renderer->w_buffer_size_in_bytes = sizeof(f32) * (size_t)w * (size_t)h;
 
-    GenerateL0Tiles(renderer, L0_TILE_SIZE);
+    GenerateTiles(renderer, LAYER0_TILE_SIZE);
     return true;
 }
 
@@ -93,14 +92,22 @@ Corner GetTrivialRejectCorner(f32 A, f32 B) {
     }
 }
 
-u64 BinTriangle2D_L0(Renderer* renderer, Triangle2D* triangle) {
+void BinTriangle2D(Renderer* renderer, std::unordered_map<u64, Tile>& tile_map, Triangle2D_Desc* triangle) {
+    triangle->trivially_accepted_mask = 0;
+    triangle->coverage_mask = 0;
     // These can be pre-computed when triangle is constructed. (Also should be recomputed when triangle is transformed)
     f32 A01, B01, A12, B12, A20, B20 = 0.0f;
 
+    // Edge coefficients in the edge equation.
+    // Edge from Vertex N to vertex M
+    // A<N,M> = (vM.x - vN.x);
+    // B<N,M> = (vN.y - vM.y);
     GetEdgeCoefficients(triangle->vtx_pos0, triangle->vtx_pos1, A01, B01);
     GetEdgeCoefficients(triangle->vtx_pos1, triangle->vtx_pos2, A12, B12);
     GetEdgeCoefficients(triangle->vtx_pos2, triangle->vtx_pos0, A20, B20);
 
+    // Trivial rejection corner is the corner in the tile that is the most negative(or inside the triangle) according to
+    // an edge. If this corner is not inside the triangle(according to AN edge), we dismiss(trivially reject) the tile.
     Corner E01_TR_corner = GetTrivialRejectCorner(A01, B01);
     Corner E12_TR_corner = GetTrivialRejectCorner(A12, B12);
     Corner E20_TR_corner = GetTrivialRejectCorner(A20, B20);
@@ -116,112 +123,95 @@ u64 BinTriangle2D_L0(Renderer* renderer, Triangle2D* triangle) {
 
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
-    for (Tile const& tile : renderer->l0_tiles) {
+    draw_list->AddLine(*(ImVec2*)&triangle->vtx_pos0, *(ImVec2*)&triangle->vtx_pos1, IM_COL32(0, 0, 255, 255));
+    draw_list->AddLine(*(ImVec2*)&triangle->vtx_pos1, *(ImVec2*)&triangle->vtx_pos2, IM_COL32(0, 0, 255, 255));
+    draw_list->AddLine(*(ImVec2*)&triangle->vtx_pos2, *(ImVec2*)&triangle->vtx_pos0, IM_COL32(0, 0, 255, 255));
 
+    for (size_t tile_idx = 0; tile_idx < renderer->tile_count; ++tile_idx) {
+
+        Tile const& tile = tile_map[(1 << tile_idx)];
         ImVec2 tile_text_pos = {(f32)tile.orig_x0, (f32)tile.orig_y0};
 
-        // @TODO: clean tis shi up
         // Edge 01 -- TRC = Trivial reject corner
-        vec2f E01_TRC_pos = GetTileCornerPosition(E01_TR_corner, tile);
-        f32 E01_TRC_value = A01 * (E01_TRC_pos.y - triangle->vtx_pos0.y) + B01 * (E01_TRC_pos.x - triangle->vtx_pos0.x);
+        vec2f E01_TRC_pos_minus_vtx0 = GetTileCornerPosition(E01_TR_corner, tile) - triangle->vtx_pos0;
+        f32 E01_TRC_value = A01 * E01_TRC_pos_minus_vtx0.y + B01 * E01_TRC_pos_minus_vtx0.x;
 
         if (E01_TRC_value > 0.0f) {
             draw_list->AddText(tile_text_pos, IM_COL32(255, 0, 0, 255),
-                               fmt::format("Tile {0} (TR)", tile.index).c_str());
+                               fmt::format("Tile {0} (TR01)", tile.index).c_str());
             continue;
         }
 
         // Edge 12
-        vec2f E12_TRC_pos = GetTileCornerPosition(E12_TR_corner, tile);
-        f32 E12_TRC_value = A12 * (E12_TRC_pos.y - triangle->vtx_pos1.y) + B12 * (E12_TRC_pos.x - triangle->vtx_pos1.x);
+        vec2f E12_TRC_pos_minus_vtx1 = GetTileCornerPosition(E12_TR_corner, tile) - triangle->vtx_pos1;
+        f32 E12_TRC_value = A12 * E12_TRC_pos_minus_vtx1.y + B12 * E12_TRC_pos_minus_vtx1.x;
 
         if (E12_TRC_value > 0.0f) {
             draw_list->AddText(tile_text_pos, IM_COL32(255, 0, 0, 255),
-                               fmt::format("Tile {0} (TR)", tile.index).c_str());
+                               fmt::format("Tile {0} (TR12)", tile.index).c_str());
             continue;
         }
 
-        vec2f E20_TRC_pos = GetTileCornerPosition(E20_TR_corner, tile);
-        f32 E20_TRC_value = A20 * (E20_TRC_pos.y - triangle->vtx_pos2.y) + B20 * (E20_TRC_pos.x - triangle->vtx_pos2.x);
+        vec2f E20_TRC_pos_minus_vtx2 = GetTileCornerPosition(E20_TR_corner, tile) - triangle->vtx_pos2;
+        f32 E20_TRC_value = A20 * E20_TRC_pos_minus_vtx2.y + B20 * E20_TRC_pos_minus_vtx2.x;
 
         if (E20_TRC_value > 0.0f) {
             draw_list->AddText(tile_text_pos, IM_COL32(255, 0, 0, 255),
-                               fmt::format("Tile {0} (TR)", tile.index).c_str());
+                               fmt::format("Tile {0} (TR20)", tile.index).c_str());
             continue;
         }
 
-        // I'm sure there is some clever shit we can do to avoid calculating this all over.
-        vec2f E01_TAC_pos = GetTileCornerPosition(GetOppositeCorner(E01_TR_corner), tile);
-        vec2f E12_TAC_pos = GetTileCornerPosition(GetOppositeCorner(E12_TR_corner), tile);
-        vec2f E20_TAC_pos = GetTileCornerPosition(GetOppositeCorner(E20_TR_corner), tile);
+        // A trivially accepted tile is a tile that the triangle completely covers.
+        // Trivial acceptance corner is the corner that is most positive(outside) the triangle w.r.t to an edge.
+        // If the most outside corners are all inside, that means tile is covered completely by the triangle.
+        // so we trivially accept it.
+        vec2f E01_TAC_pos_minus_vtx0 =
+            GetTileCornerPosition(GetOppositeCorner(E01_TR_corner), tile) - triangle->vtx_pos0;
+        vec2f E12_TAC_pos_minus_vtx1 =
+            GetTileCornerPosition(GetOppositeCorner(E12_TR_corner), tile) - triangle->vtx_pos1;
+        vec2f E20_TAC_pos_minus_vtx2 =
+            GetTileCornerPosition(GetOppositeCorner(E20_TR_corner), tile) - triangle->vtx_pos2;
 
-        f32 E01_TAC_value = A01 * (E01_TAC_pos.y - triangle->vtx_pos0.y) + B01 * (E01_TAC_pos.x - triangle->vtx_pos0.x);
-
-        f32 E12_TAC_value = A12 * (E12_TAC_pos.y - triangle->vtx_pos1.y) + B12 * (E12_TAC_pos.x - triangle->vtx_pos1.x);
-
-        f32 E20_TAC_value = A20 * (E20_TAC_pos.y - triangle->vtx_pos2.y) + B20 * (E20_TAC_pos.x - triangle->vtx_pos2.x);
+        f32 E01_TAC_value = A01 * E01_TAC_pos_minus_vtx0.y + B01 * E01_TAC_pos_minus_vtx0.x;
+        f32 E12_TAC_value = A12 * E12_TAC_pos_minus_vtx1.y + B12 * E12_TAC_pos_minus_vtx1.x;
+        f32 E20_TAC_value = A20 * E20_TAC_pos_minus_vtx2.y + B20 * E20_TAC_pos_minus_vtx2.x;
 
         if (E01_TAC_value < 0.0f && E12_TAC_value < 0.0f && E20_TAC_value < 0.0f) {
+            triangle->trivially_accepted_mask |= tile.id;
             draw_list->AddText(tile_text_pos, IM_COL32(0, 255, 0, 255),
                                fmt::format("Tile {0} (TA)", tile.index).c_str());
             continue;
         }
+        triangle->coverage_mask |= tile.id;
 
         draw_list->AddText(tile_text_pos, IM_COL32_WHITE, fmt::format("Tile {0}", tile.index).c_str());
     }
 
-    constexpr u32 GRID_COLOR = IM_COL32(50, 50, 125, 255);
-    size_t const pitch = renderer->l0_tile_count_pitch;
-
-    for (size_t tile_y = 0; tile_y < pitch; ++tile_y) {
-        // Horizontal lines
-        ImVec2 horizontal_start = {0.0f, static_cast<f32>(tile_y * L0_TILE_SIZE)};
-        ImVec2 horizontal_end = {renderer->fBuffer_width, horizontal_start.y};
-        draw_list->AddLine(horizontal_start, horizontal_end, GRID_COLOR);
-
-        // Vertical lines + Tile ID text
-        for (size_t tile_x = 0; tile_x < pitch; ++tile_x) {
-            ImVec2 vertical_start = {static_cast<f32>(tile_x * L0_TILE_SIZE), 0.0f};
-            ImVec2 vertical_end = {vertical_start.x, renderer->fBuffer_heigth};
-            draw_list->AddLine(vertical_start, vertical_end, GRID_COLOR);
-        }
-    }
     ImGui::PopStyleVar(3);
-
     ImGui::End();
-    return 0;
 }
 
-void GenerateL0Tiles(Renderer* renderer, size_t tile_size) {
-    renderer->l0_tile_count_pitch =
-        std::ceil((f32)std::max(renderer->buffer_width, renderer->buffer_height) / L0_TILE_SIZE);
-    renderer->l0_tile_count = renderer->l0_tile_count_pitch * renderer->l0_tile_count_pitch;
+void TileWorker(RenderPass2D* render_pass, Tile* tile) {
+}
 
-    renderer->l0_tiles.resize(renderer->l0_tile_count);
+void RD_NewFrame(RenderPass2D* render_pass) {
+    render_pass->triangles_to_draw.clear();
+    render_pass->triangles_to_draw.reserve(256);
+}
 
-    for (size_t tile_y = 0; tile_y < renderer->l0_tile_count_pitch; ++tile_y) {
-        for (size_t tile_x = 0; tile_x < renderer->l0_tile_count_pitch; ++tile_x) {
-            u32 index = tile_y * renderer->l0_tile_count_pitch + tile_x;
-            u64 id = (1 << index);
+void RD_SubmitTriangle(RenderPass2D* render_pass, Triangle2D_Desc* desc) {
+    BinTriangle2D(render_pass->renderer, render_pass->renderer->tile_map, desc);
+    render_pass->triangles_to_draw.push_back(desc);
+}
 
-            Tile& t = renderer->l0_tiles[index];
-            t.index = index;
-            t.id = id;
-            t.tile_x = tile_x;
-            t.tile_y = tile_y;
-            // Top-left
-            t.orig_x0 = tile_x * L0_TILE_SIZE;
-            t.orig_y0 = tile_y * L0_TILE_SIZE;
-            // Top-right
-            t.orig_x1 = t.orig_x0 + L0_TILE_SIZE;
-            t.orig_y1 = t.orig_y0;
-            // Bottom-left
-            t.orig_x2 = t.orig_x0;
-            t.orig_y2 = t.orig_y0 + L0_TILE_SIZE;
-            // Bottom-right
-            t.orig_x3 = t.orig_x1;
-            t.orig_y3 = t.orig_y1 + L0_TILE_SIZE;
-        }
+void RD_Render(RenderPass2D* render_pass) {
+    for (size_t i = 0; i < render_pass->renderer->tile_count; ++i) {
+				Tile* tile = &render_pass->renderer->tile_map[1ULL << i];
+        render_pass->tile_jobs[i] = std::thread(&TileWorker, render_pass, tile);
+    }
+
+    for (size_t i = 0; i < render_pass->renderer->tile_count; ++i) {
+        render_pass->tile_jobs[i].join();
     }
 }
 
@@ -232,29 +222,64 @@ void DrawTileGrid(Renderer* renderer) {
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs);
     ImGui::SetWindowSize(ImVec2(renderer->fBuffer_width, renderer->fBuffer_heigth));
     ImGui::SetWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 
-    constexpr u32 GRID_COLOR = IM_COL32(50, 50, 125, 255);
-    size_t const pitch = renderer->l0_tile_count_pitch;
+    constexpr u32 GRID_COLOR = IM_COL32(75, 50, 50, 255);
+    size_t const pitch = renderer->tile_count_pitch;
 
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    auto* draw_list = ImGui::GetWindowDrawList();
     for (size_t tile_y = 0; tile_y < pitch; ++tile_y) {
         // Horizontal lines
-        ImVec2 horizontal_start = {0.0f, static_cast<f32>(tile_y * L0_TILE_SIZE)};
+        ImVec2 horizontal_start = {0.0f, static_cast<f32>(tile_y * LAYER0_TILE_SIZE)};
         ImVec2 horizontal_end = {renderer->fBuffer_width, horizontal_start.y};
         draw_list->AddLine(horizontal_start, horizontal_end, GRID_COLOR);
 
         // Vertical lines + Tile ID text
         for (size_t tile_x = 0; tile_x < pitch; ++tile_x) {
-            ImVec2 vertical_start = {static_cast<f32>(tile_x * L0_TILE_SIZE), 0.0f};
+            ImVec2 vertical_start = {static_cast<f32>(tile_x * LAYER0_TILE_SIZE), 0.0f};
             ImVec2 vertical_end = {vertical_start.x, renderer->fBuffer_heigth};
             draw_list->AddLine(vertical_start, vertical_end, GRID_COLOR);
-
-            u32 index = tile_y * pitch + tile_x;
-            ImVec2 text_loc = {vertical_start.x + 4.0f, horizontal_start.y};
-            draw_list->AddText(text_loc, IM_COL32_WHITE, fmt::format("Tile {0}", (index)).c_str());
         }
     }
+    ImGui::PopStyleVar(3);
     ImGui::End();
+}
+
+void GenerateTiles(Renderer* renderer, size_t tile_size) {
+    renderer->tile_count_pitch =
+        std::ceil((f32)std::max(renderer->buffer_width, renderer->buffer_height) / LAYER0_TILE_SIZE);
+    renderer->tile_count = renderer->tile_count_pitch * renderer->tile_count_pitch;
+
+    for (size_t tile_y = 0; tile_y < renderer->tile_count_pitch; ++tile_y) {
+        for (size_t tile_x = 0; tile_x < renderer->tile_count_pitch; ++tile_x) {
+
+            u32 index = tile_y * renderer->tile_count_pitch + tile_x;
+            u64 id = (1 << (u64)index);
+
+            Tile& t = renderer->tile_map[id];
+            t.index = index;
+            t.id = id;
+
+            t.tile_x = tile_x;
+            t.tile_y = tile_y;
+            t.tile_size = LAYER0_TILE_SIZE;
+
+            // Top-left
+            t.orig_x0 = tile_x * LAYER0_TILE_SIZE;
+            t.orig_y0 = tile_y * LAYER0_TILE_SIZE;
+            // Top-right
+            t.orig_x1 = t.orig_x0 + LAYER0_TILE_SIZE;
+            t.orig_y1 = t.orig_y0;
+            // Bottom-left
+            t.orig_x2 = t.orig_x0;
+            t.orig_y2 = t.orig_y0 + LAYER0_TILE_SIZE;
+            // Bottom-right
+            t.orig_x3 = t.orig_x1;
+            t.orig_y3 = t.orig_y1 + LAYER0_TILE_SIZE;
+        }
+    }
 }
 
 void ClearBuffers(Renderer* renderer) {
@@ -358,7 +383,7 @@ void DrawMesh(Renderer* renderer, Mesh* mesh, glm::mat4 const& mvp) {
     }
 }
 
-void DrawTriangle2D(Renderer* renderer, Triangle2D* tri) {
+void DrawTriangle2D(Renderer* renderer, Triangle2D_Desc* tri) {
     // tri AABB
     vec2f origin, size;
     GetTriangleAABB(tri->vtx_pos0, tri->vtx_pos1, tri->vtx_pos2, origin, size);

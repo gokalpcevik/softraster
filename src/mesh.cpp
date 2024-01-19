@@ -3,6 +3,9 @@
 
 bool gfx::ImportMeshFromSceneFile(Mesh* mesh, char const* file_path, size_t mesh_index) {
     Assimp::Importer importer;
+
+		auto* x = importer.ReadFileFromMemory(nullptr, 120212, 0);
+
     aiScene const* scene = importer.ReadFile(file_path, aiProcess_Triangulate);
     if (mesh_index >= scene->mNumMeshes)
         return false;

@@ -26,6 +26,7 @@ void update_flying_camera_controller(FlyingCameraController* camera, f32 dt) {
 
     forward = glm::normalize(m * vec4f(forward, 0.0f));
     right = glm::cross(vec3f(forward), vec3f(0.0f, 1.0f, 0.0));
+		
 
     if (IsKeyPressed(SDL_SCANCODE_W))
         camera->position += forward * camera->speed * dt;

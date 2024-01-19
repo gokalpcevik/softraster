@@ -22,27 +22,19 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/ext/scalar_constants.hpp>
 #include <glm/glm.hpp>
+#include <unordered_map>
 
 namespace gfx {
 
-static size_t constexpr L0_TILE_SIZE = 128;
-static size_t constexpr L1_TILE_SIZE = 16;
+static size_t constexpr LAYER0_TILE_SIZE = 200;
 
-static constexpr u8 CORNER_VERTICAL_BIT   = (1 << 0);
-static constexpr u8 CORNER_HORIZONTAL_BIT = (1 << 1);
-static constexpr u8 CORNER_OPPOSITE_MASK  = (CORNER_VERTICAL_BIT | CORNER_HORIZONTAL_BIT);
+static u8 constexpr CORNER_VERTICAL_BIT = (1 << 0);
+static u8 constexpr CORNER_HORIZONTAL_BIT = (1 << 1);
+static u8 constexpr CORNER_OPPOSITE_MASK = (CORNER_VERTICAL_BIT | CORNER_HORIZONTAL_BIT);
 
 enum class Corner : u8 { TopLeft = 0b00, TopRight = 0b10, BottomLeft = 0b01, BottomRight = 0b11 };
 
-__forceinline Corner GetOppositeCorner(Corner corner) {
-		return static_cast<Corner>(static_cast<u8>(corner) ^ CORNER_OPPOSITE_MASK);
-}
-
 struct Tile {
-    u64 id;
-    u32 index;
-    u32 tile_x, tile_y;
-
     // Tile top-left corner in raster space
     u32 orig_x0, orig_y0;
     // Tile top-right corner
@@ -51,42 +43,39 @@ struct Tile {
     u32 orig_x2, orig_y2;
     // Tile bottom-right corner
     u32 orig_x3, orig_y3;
+
+    u64 id = 0;
+    u32 index = 0;
+    u32 tile_x, tile_y;
+    size_t tile_size = LAYER0_TILE_SIZE;
 };
 
-struct Triangle2D {
-    // Which tiles this triangle covers
-    u64 coverage_mask = 0x0;
-
+struct Triangle2D_Desc {
     // Vertex positions (screen-space)
     vec2f vtx_pos0 = vec2f(0.0f);
     vec2f vtx_pos1 = vec2f(0.0f);
     vec2f vtx_pos2 = vec2f(0.0f);
+    vec3f color = vec3f(1.0f, 0.0f, 1.0f);
 
-    std::string debug_name = "Triangle";
+    // Which tiles this triangle covers
+    u64 coverage_mask = 0x0;
+    u64 trivially_accepted_mask = 0x0;
 };
 
-struct Renderer {
-    SDL_Texture* framebuffer = nullptr;
-    f32 aspect_ratio = 800.0f / 600.0f;
-    s32 color_buffer_pitch = 0;
-    SDL_Renderer* sdl_renderer = nullptr;
-    u32* color_buffer = nullptr;
-    f32* w_buffer = nullptr;
-    f32* clear_w_buffer = nullptr;
+struct Triangle3D {
+    // Vertex positions (NDC) and w_i = 1.0 / w_i
+    vec4f vtx0_p = vec4f(0.0f);
+    vec4f vtx1_p = vec4f(0.0f);
+    vec4f vtx2_p = vec4f(0.0f);
 
-    size_t buffer_width = 0;
-    size_t buffer_height = 0;
-    size_t buffer_size_in_pixels = 0;
-    f32 fBuffer_width = 0.0f;
-    f32 fBuffer_heigth = 0.0f;
-    // In bytes
-    size_t color_buffer_size_in_bytes = 0;
-    size_t w_buffer_size_in_bytes = 0;
+    // Vertex colors
+    vec3f vtx0_c = vec3f(0.0);
+    vec3f vtx1_c = vec3f(0.0);
+    vec3f vtx2_c = vec3f(0.0);
 
-    // Tile
-    std::vector<Tile> l0_tiles;
-    size_t l0_tile_count_pitch = 0;
-    size_t l0_tile_count = 0;
+    // Which tiles this triangle covers
+    u64 coverage_mask = 0x0;
+    u64 trivially_accepted_mask = 0x0;
 };
 
 struct InterpolatedTriangle {
@@ -109,6 +98,42 @@ struct InterpolatedTriangle {
     } attributes_w;
 };
 
+struct Renderer {
+    SDL_Texture* framebuffer = nullptr;
+    f32 aspect_ratio = 800.0f / 600.0f;
+    s32 color_buffer_pitch = 0;
+    SDL_Renderer* sdl_renderer = nullptr;
+    u32* color_buffer = nullptr;
+    f32* w_buffer = nullptr;
+    f32* clear_w_buffer = nullptr;
+
+    size_t buffer_width = 0;
+    size_t buffer_height = 0;
+    size_t buffer_size_in_pixels = 0;
+    f32 fBuffer_width = 0.0f;
+    f32 fBuffer_heigth = 0.0f;
+    // In bytes
+    size_t color_buffer_size_in_bytes = 0;
+    size_t w_buffer_size_in_bytes = 0;
+
+    size_t tile_count_pitch = 0;
+    size_t tile_count = 0;
+
+    std::unordered_map<u64, Tile> tile_map;
+};
+
+struct RenderPass2D {
+
+    RenderPass2D(Renderer* renderer) : renderer(renderer) {
+        triangles_to_draw.reserve(256);
+        tile_jobs.resize(renderer->tile_count);
+    }
+
+    Renderer* renderer = nullptr;
+    std::vector<Triangle2D_Desc*> triangles_to_draw;
+    std::vector<std::thread> tile_jobs;
+};
+
 void InitImGui(SDL_Window* wnd, SDL_Renderer* renderer);
 bool InitRenderer(SDL_Window* window, Renderer* renderer);
 void CleanupRenderer(Renderer* renderer);
@@ -117,15 +142,24 @@ void Present(Renderer* renderer);
 void PutPixel(Renderer* renderer, u32 x, u32 y, uint32_t color);
 void PutPixel(Renderer* renderer, u32 x, u32 y, vec3f const& color);
 
-Corner GetTrivialRejectCorner(f32 A, f32 B);
-u64 BinTriangle2D_L0(Renderer* renderer, Triangle2D* triangle);
-void GenerateL0Tiles(Renderer* renderer, size_t tile_size = L0_TILE_SIZE);
+void BinTriangle2D(Renderer* renderer, std::unordered_map<u64, Tile>& tile_map, Triangle2D_Desc* triangle);
+void GenerateTiles(Renderer* renderer, size_t tile_size = LAYER0_TILE_SIZE);
 void DrawTileGrid(Renderer* renderer);
 void DrawRect(Renderer* renderer, s32 x0, s32 y0, s32 w, s32 h, u32 color);
 void DrawRect(Renderer* renderer, vec2i const& position, vec2i const& size, u32 color);
-void DrawTriangle2D(Renderer* renderer, Triangle2D* tri);
+void DrawTriangle2D(Renderer* renderer, Triangle2D_Desc* tri);
 void DrawTriangle3D(Renderer* renderer, InterpolatedTriangle* tri);
 void DrawMesh(Renderer* renderer, Mesh* mesh, glm::mat4 const& mvp);
+
+void RD_NewFrame(RenderPass2D* render_pass);
+void RD_SubmitTriangle(RenderPass2D* render_pass, Triangle2D_Desc* desc);
+void RD_Render(RenderPass2D* render_pass);
+
+Corner GetTrivialRejectCorner(f32 A, f32 B);
+
+__forceinline Corner GetOppositeCorner(Corner corner) {
+    return static_cast<Corner>(static_cast<u8>(corner) ^ CORNER_OPPOSITE_MASK);
+}
 
 __forceinline constexpr u32 RGBA(u8 R, u8 G, u8 B, u8 A = 255) {
     return (u32)B | (u32)(G << 8) | (u32)(R << 16) | (u32)(A << 24);
@@ -149,13 +183,13 @@ __forceinline float EvaluateEdge(vec2f const& p, vec2f const& v0, vec2f const& v
 __forceinline vec2f GetTileCornerPosition(Corner corner, Tile const& tile) {
     switch (corner) {
     case Corner::TopLeft:
-				return {(f32)tile.orig_x0, (f32)tile.orig_y0};
+        return {(f32)tile.orig_x0, (f32)tile.orig_y0};
     case Corner::TopRight:
-				return {(f32)tile.orig_x1, (f32)tile.orig_y1};
+        return {(f32)tile.orig_x1, (f32)tile.orig_y1};
     case Corner::BottomLeft:
-				return {(f32)tile.orig_x2, (f32)tile.orig_y2};
+        return {(f32)tile.orig_x2, (f32)tile.orig_y2};
     case Corner::BottomRight:
-				return {(f32)tile.orig_x3, (f32)tile.orig_y3};
+        return {(f32)tile.orig_x3, (f32)tile.orig_y3};
     }
 }
 
