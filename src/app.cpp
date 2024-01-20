@@ -47,16 +47,15 @@ int gfx::Run(int argc, char** argv) {
         return false;
     }
 
-
     if (!InitRenderer(app->window, &app->renderer)) {
         return false;
     }
 
     InitImGui(app->window, app->renderer.sdl_renderer);
 
-    if (!ImportMeshFromSceneFile(&cube, "meshes/cube.obj")) {
-        return false;
-    }
+    // if (!ImportMeshFromSceneFile(&cube, "meshes/cube.obj")) {
+    //     return false;
+    // }
 
     while (app->is_running) {
         app->perf_counter = SDL_GetPerformanceCounter();
@@ -87,22 +86,22 @@ int gfx::Run(int argc, char** argv) {
             static vec2f vtx_pos0 = {150.0f, 100.0f};
             static vec2f vtx_pos1 = {400.0f, 400.0f};
             static vec2f vtx_pos2 = {550.0f, 200.0f};
-            static Triangle2D_Desc test_triangle{vtx_pos0, vtx_pos1, vtx_pos2, {}, 0, 0};
-						static RenderPass2D render_pass(renderer);
+            static Triangle2D_Desc test_triangle{vtx_pos0,    vtx_pos1,   vtx_pos2, COLOR_RED,
+                                                 COLOR_GREEN, COLOR_BLUE, 0,        0};
+            static RenderPass2D rp(renderer);
             ImGui::Begin("Triangle");
             ImGui::DragFloat2("V0", (float*)&test_triangle.vtx_pos0, 1.f, 0.0f, 10000.0f);
             ImGui::DragFloat2("V1", (float*)&test_triangle.vtx_pos1, 1.f, 0.0f, 10000.0f);
             ImGui::DragFloat2("V2", (float*)&test_triangle.vtx_pos2, 1.f, 0.0f, 10000.0f);
-						ImGui::Text("Coverage Mask: %llx", test_triangle.coverage_mask);
-						ImGui::Text("TA Mask: %llx", test_triangle.trivially_accepted_mask);
+            ImGui::Text("Coverage Mask: 0x%llX", test_triangle.coverage_mask);
+            ImGui::Text("TA Mask: 0x%llX", test_triangle.trivially_accepted_mask);
             ImGui::End();
-
-						RD_NewFrame(&render_pass);
-						RD_SubmitTriangle(&render_pass, &test_triangle);
-						RD_Render(&render_pass);
+            RD_NewFrame(&rp);
+            RD_SubmitTriangle(&rp, &test_triangle);
+            RD_Render(&rp);
         }
 
-				DrawTileGrid(renderer);
+        DrawTileGrid(renderer);
 
         // Mesh
         // {

@@ -26,11 +26,15 @@
 
 namespace gfx {
 
-static size_t constexpr LAYER0_TILE_SIZE = 200;
+static size_t constexpr LAYER0_TILE_SIZE = 128;
 
 static u8 constexpr CORNER_VERTICAL_BIT = (1 << 0);
 static u8 constexpr CORNER_HORIZONTAL_BIT = (1 << 1);
 static u8 constexpr CORNER_OPPOSITE_MASK = (CORNER_VERTICAL_BIT | CORNER_HORIZONTAL_BIT);
+
+static vec3f constexpr COLOR_RED = {1.0f, 0.0f, 0.0f};
+static vec3f constexpr COLOR_GREEN = {0.0f, 1.0f, 0.0f};
+static vec3f constexpr COLOR_BLUE = {0.0f, 0.0f, 1.0f};
 
 enum class Corner : u8 { TopLeft = 0b00, TopRight = 0b10, BottomLeft = 0b01, BottomRight = 0b11 };
 
@@ -55,10 +59,12 @@ struct Triangle2D_Desc {
     vec2f vtx_pos0 = vec2f(0.0f);
     vec2f vtx_pos1 = vec2f(0.0f);
     vec2f vtx_pos2 = vec2f(0.0f);
-    vec3f color = vec3f(1.0f, 0.0f, 1.0f);
+    vec3f c0 = vec3f(1.0f, 1.0f, 1.0f);
+    vec3f c1 = vec3f(1.0f, 1.0f, 1.0f);
+    vec3f c2 = vec3f(1.0f, 1.0f, 1.0f);
 
-    // Which tiles this triangle covers
     u64 coverage_mask = 0x0;
+    u64 trivially_rejected_mask = 0x0;
     u64 trivially_accepted_mask = 0x0;
 };
 
@@ -139,8 +145,8 @@ bool InitRenderer(SDL_Window* window, Renderer* renderer);
 void CleanupRenderer(Renderer* renderer);
 void ClearBuffers(Renderer* renderer);
 void Present(Renderer* renderer);
-void PutPixel(Renderer* renderer, u32 x, u32 y, uint32_t color);
-void PutPixel(Renderer* renderer, u32 x, u32 y, vec3f const& color);
+void PutPixel(Renderer* renderer, s32 x, s32 y, uint32_t color);
+void PutPixel(Renderer* renderer, s32 x, s32 y, vec3f const& color);
 
 void BinTriangle2D(Renderer* renderer, std::unordered_map<u64, Tile>& tile_map, Triangle2D_Desc* triangle);
 void GenerateTiles(Renderer* renderer, size_t tile_size = LAYER0_TILE_SIZE);

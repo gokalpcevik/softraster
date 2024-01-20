@@ -94,6 +94,7 @@ Corner GetTrivialRejectCorner(f32 A, f32 B) {
 
 void BinTriangle2D(Renderer* renderer, std::unordered_map<u64, Tile>& tile_map, Triangle2D_Desc* triangle) {
     triangle->trivially_accepted_mask = 0;
+    triangle->trivially_rejected_mask = 0;
     triangle->coverage_mask = 0;
     // These can be pre-computed when triangle is constructed. (Also should be recomputed when triangle is transformed)
     f32 A01, B01, A12, B12, A20, B20 = 0.0f;
@@ -129,7 +130,7 @@ void BinTriangle2D(Renderer* renderer, std::unordered_map<u64, Tile>& tile_map, 
 
     for (size_t tile_idx = 0; tile_idx < renderer->tile_count; ++tile_idx) {
 
-        Tile const& tile = tile_map[(1 << tile_idx)];
+        Tile const& tile = tile_map[((u64)1 << tile_idx)];
         ImVec2 tile_text_pos = {(f32)tile.orig_x0, (f32)tile.orig_y0};
 
         // Edge 01 -- TRC = Trivial reject corner
@@ -139,6 +140,7 @@ void BinTriangle2D(Renderer* renderer, std::unordered_map<u64, Tile>& tile_map, 
         if (E01_TRC_value > 0.0f) {
             draw_list->AddText(tile_text_pos, IM_COL32(255, 0, 0, 255),
                                fmt::format("Tile {0} (TR01)", tile.index).c_str());
+            triangle->trivially_rejected_mask |= tile.id;
             continue;
         }
 
@@ -149,6 +151,7 @@ void BinTriangle2D(Renderer* renderer, std::unordered_map<u64, Tile>& tile_map, 
         if (E12_TRC_value > 0.0f) {
             draw_list->AddText(tile_text_pos, IM_COL32(255, 0, 0, 255),
                                fmt::format("Tile {0} (TR12)", tile.index).c_str());
+            triangle->trivially_rejected_mask |= tile.id;
             continue;
         }
 
@@ -158,6 +161,7 @@ void BinTriangle2D(Renderer* renderer, std::unordered_map<u64, Tile>& tile_map, 
         if (E20_TRC_value > 0.0f) {
             draw_list->AddText(tile_text_pos, IM_COL32(255, 0, 0, 255),
                                fmt::format("Tile {0} (TR20)", tile.index).c_str());
+            triangle->trivially_rejected_mask |= tile.id;
             continue;
         }
 
@@ -192,6 +196,60 @@ void BinTriangle2D(Renderer* renderer, std::unordered_map<u64, Tile>& tile_map, 
 }
 
 void TileWorker(RenderPass2D* render_pass, Tile* tile) {
+
+    for (Triangle2D_Desc* tri : render_pass->triangles_to_draw) {
+
+        if (tri->trivially_rejected_mask & tile->id) {
+            continue;
+        }
+
+        // Triangle is trivially accepted, avoid doing inside-outside tests.
+        if (tri->trivially_accepted_mask & tile->id) {
+            for (s32 y = tile->orig_y0; y <= tile->orig_y3; ++y) {
+                for (s32 x = tile->orig_x0; x <= tile->orig_x3; ++x) {
+                    vec2f sample{(f32)(x) + 0.5f, (f32)(y) + 0.5f};
+
+                    f32 E01 = EvaluateEdge(sample, tri->vtx_pos0, tri->vtx_pos1);
+                    f32 E12 = EvaluateEdge(sample, tri->vtx_pos1, tri->vtx_pos2);
+                    f32 E20 = EvaluateEdge(sample, tri->vtx_pos2, tri->vtx_pos0);
+                    f32 parallelogram_area = EvaluateEdge(tri->vtx_pos0, tri->vtx_pos1, tri->vtx_pos2);
+                    // Barycentric coordinates
+                    f32 l0 = E12 / parallelogram_area;
+                    f32 l1 = E20 / parallelogram_area;
+                    f32 l2 = E01 / parallelogram_area;
+
+                    vec3f color = tri->c0 * l0 + tri->c1 * l1 + tri->c2 * l2;
+                    PutPixel(render_pass->renderer, x, y, color);
+                }
+            }
+            continue;
+        }
+
+        if (tri->coverage_mask & tile->id) {
+            for (s32 y = tile->orig_y0; y <= tile->orig_y3; ++y) {
+                for (s32 x = tile->orig_x0; x <= tile->orig_x3; ++x) {
+                    vec2f sample{(f32)(x) + 0.5f, (f32)(y) + 0.5f};
+
+                    f32 E01 = EvaluateEdge(sample, tri->vtx_pos0, tri->vtx_pos1);
+                    f32 E12 = EvaluateEdge(sample, tri->vtx_pos1, tri->vtx_pos2);
+                    f32 E20 = EvaluateEdge(sample, tri->vtx_pos2, tri->vtx_pos0);
+                    bool is_point_inside_triangle = E01 <= 0.0f && E12 <= 0.0f && E20 <= 0.0f;
+
+                    if (is_point_inside_triangle) {
+                        f32 parallelogram_area = EvaluateEdge(tri->vtx_pos0, tri->vtx_pos1, tri->vtx_pos2);
+                        // Barycentric coordinates
+                        f32 l0 = E12 / parallelogram_area;
+                        f32 l1 = E20 / parallelogram_area;
+                        f32 l2 = E01 / parallelogram_area;
+
+                        vec3f color = tri->c0 * l0 + tri->c1 * l1 + tri->c2 * l2;
+                        PutPixel(render_pass->renderer, x, y, color);
+                    }
+                }
+            }
+						// continue;
+        }
+    }
 }
 
 void RD_NewFrame(RenderPass2D* render_pass) {
@@ -206,7 +264,7 @@ void RD_SubmitTriangle(RenderPass2D* render_pass, Triangle2D_Desc* desc) {
 
 void RD_Render(RenderPass2D* render_pass) {
     for (size_t i = 0; i < render_pass->renderer->tile_count; ++i) {
-				Tile* tile = &render_pass->renderer->tile_map[1ULL << i];
+        Tile* tile = &render_pass->renderer->tile_map[1ULL << i];
         render_pass->tile_jobs[i] = std::thread(&TileWorker, render_pass, tile);
     }
 
@@ -251,12 +309,13 @@ void GenerateTiles(Renderer* renderer, size_t tile_size) {
     renderer->tile_count_pitch =
         std::ceil((f32)std::max(renderer->buffer_width, renderer->buffer_height) / LAYER0_TILE_SIZE);
     renderer->tile_count = renderer->tile_count_pitch * renderer->tile_count_pitch;
+		assert(renderer->tile_count <= 64);
 
     for (size_t tile_y = 0; tile_y < renderer->tile_count_pitch; ++tile_y) {
         for (size_t tile_x = 0; tile_x < renderer->tile_count_pitch; ++tile_x) {
 
             u32 index = tile_y * renderer->tile_count_pitch + tile_x;
-            u64 id = (1 << (u64)index);
+            u64 id = ((u64)1 << (u64)index);
 
             Tile& t = renderer->tile_map[id];
             t.index = index;
@@ -294,29 +353,19 @@ void Present(Renderer* renderer) {
     SDL_RenderPresent(renderer->sdl_renderer);
 }
 
-void PutPixel(Renderer* renderer, u32 x, u32 y, u32 color) {
+void PutPixel(Renderer* renderer, s32 x, s32 y, u32 color) {
     renderer->color_buffer[y * renderer->buffer_width + x] = color;
 }
 
-void PutPixel(Renderer* renderer, u32 x, u32 y, vec3f const& color) {
+void PutPixel(Renderer* renderer, s32 x, s32 y, vec3f const& color) {
     vec3f color_scaled = color * 255.0f;
     u32 color_8bpc = RGB((u8)color_scaled.x, (u8)color_scaled.y, (u8)color_scaled.z);
     renderer->color_buffer[y * renderer->buffer_width + x] = color_8bpc;
 }
 
 void DrawRect(Renderer* renderer, s32 x0, s32 y0, s32 w, s32 h, u32 color) {
-    // Most naive approach.
     for (s32 y = y0; y < (y0 + h); ++y) {
         for (s32 x = x0; x < (x0 + w); ++x) {
-            PutPixel(renderer, x, y, color);
-        }
-    }
-}
-
-void DrawRect(Renderer* renderer, vec2i const& position, vec2i const& size, u32 color) {
-    // Most naive approach.
-    for (s32 y = position.y; y < (position.y + size.y); ++y) {
-        for (s32 x = position.x; x < (position.x + size.x); ++x) {
             PutPixel(renderer, x, y, color);
         }
     }
@@ -366,38 +415,12 @@ void DrawMesh(Renderer* renderer, Mesh* mesh, glm::mat4 const& mvp) {
         triangle.v1_pw_rcp = 1.0f / v1_clip.w;
         triangle.v2_pw_rcp = 1.0f / v2_clip.w;
 
-        // ImGui::PushID(triangle_index);
-        // ImGui::Text("Triangle Index: %zu", triangle_index);
-        // ImGui::Text("Vertex 0: [z: %.4f] [1/w: %.4f]", v0_ndc.z, triangle.v0_pw_rcp);
-        // ImGui::Text("Vertex 1: [z: %.4f] [1/w: %.4f]", v1_ndc.z, triangle.v1_pw_rcp);
-        // ImGui::Text("Vertex 2: [z: %.4f] [1/w: %.4f]", v2_ndc.z, triangle.v2_pw_rcp);
-        // ImGui::Separator();
-        // ImGui::PopID();
-
         // Step 2
         triangle.attributes_w.v0_color = vec3f(1.0f, 0.0f, 0.0f) / v0_clip.w;
         triangle.attributes_w.v1_color = vec3f(0.0f, 1.0f, 0.0f) / v1_clip.w;
         triangle.attributes_w.v2_color = vec3f(0.0f, 0.0f, 1.0f) / v2_clip.w;
 
         DrawTriangle3D(renderer, &triangle);
-    }
-}
-
-void DrawTriangle2D(Renderer* renderer, Triangle2D_Desc* tri) {
-    // tri AABB
-    vec2f origin, size;
-    GetTriangleAABB(tri->vtx_pos0, tri->vtx_pos1, tri->vtx_pos2, origin, size);
-    // origin + size
-    vec2f origin_plus_size = origin + size;
-    // Go over the triangle rect.
-    for (u32 y = (u32)(origin.y - 0.5f); y <= (u32)origin_plus_size.y; ++y) {
-        for (u32 x = (u32)(origin.x - 0.5f); x <= (u32)origin_plus_size.x; ++x) {
-            vec2f sample{(f32)x + 0.5f, (f32)y + 0.5f};
-            // Check if the point in the AABB rect lies in the triangle, if so put the pixel in it.
-            if (IsPointInsideTriangle(sample, tri->vtx_pos0, tri->vtx_pos1, tri->vtx_pos2)) {
-                PutPixel(renderer, (s32)sample.x, (s32)sample.y, RGB(50, 50, 50));
-            }
-        }
     }
 }
 
@@ -408,8 +431,13 @@ void DrawTriangle3D(Renderer* renderer, InterpolatedTriangle* tri) {
     // origin + size
     vec2f origin_plus_size = origin + size;
     // Go over the triangle rect.
-    for (u32 y = (u32)(origin.y - 0.5f); y <= (u32)origin_plus_size.y; ++y) {
-        for (u32 x = (u32)(origin.x - 0.5f); x <= (u32)origin_plus_size.x; ++x) {
+    s32 y_start = (s32)(origin.y);
+    s32 x_start = (s32)(origin.x);
+    s32 y_end = (s32)(origin_plus_size.y + 1);
+    s32 x_end = (s32)(origin_plus_size.x + 1);
+
+    for (s32 y = (s32)(origin.y); y <= y_end; ++y) {
+        for (u32 x = (s32)(origin.x); x <= x_end; ++x) {
             vec2f sample{(f32)x + 0.5f, (f32)y + 0.5f};
 
             if (x >= renderer->buffer_width || y >= renderer->buffer_height)
